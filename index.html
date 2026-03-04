@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>✨ 仓库文件浏览器 · 内联预览</title>
+    <style>
+        /* ----- 全局重置 & 字体 ----- */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            color: #fff;
+        }
+
+        /* ----- 粒子背景画布 ----- */
+        #canvas-bg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            pointer-events: none; /* 鼠标事件穿透，但粒子仍能通过独立监听获取鼠标位置 */
+        }
+
+        /* ----- 主界面层（位于画布上方） ----- */
+        .app {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none; /* 让容器不拦截事件，内部元素需恢复 */
+            padding: 20px;
+        }
+
+        /* ----- 毛玻璃主卡片 ----- */
+        .main-card {
+            background: rgba(15, 20, 30, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-radius: 32px;
+            width: 95%;
+            max-width: 1400px;
+            height: 90vh;
+            max-height: 900px;
+            box-shadow: 0 25px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            pointer-events: auto; /* 卡片内可交互 */
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            transition: box-shadow 0.3s;
+        }
+
+        .main-card:hover {
+            box-shadow: 0 30px 70px rgba(0, 180, 255, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.2) inset;
+        }
+
+        /* ----- 头部：标题 + 面包屑 ----- */
+        .header {
+            padding: 20px 30px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .header h1 {
+            font-weight: 400;
+            font-size: 1.8rem;
+            letter-spacing: 2px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            text-shadow: 0 0 15px cyan;
+        }
+
+        .header h1 span {
+            font-size: 1.6rem;
+            filter: drop-shadow(0 0 8px cyan);
+        }
+
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 8px 18px;
+            border-radius: 40px;
+            font-size: 1rem;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .breadcrumb a {
+            color: #8cb4ff;
+            text-decoration: none;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+
+        .breadcrumb a:hover {
+            color: #fff;
+            text-decoration: underline;
+        }
+
+        .breadcrumb .separator {
+            color: rgba(255,255,255,0.4);
+            margin: 0 4px;
+        }
+
+        .breadcrumb .current {
+            color: #fff;
+            font-weight: 500;
+        }
+
+        /* ----- 主要内容区域：左右分栏（列表 + 预览）----- */
+        .content-panel {
+            display: flex;
+            flex: 1;
+            min-height: 0;  /* 防止flex溢出 */
+            padding: 20px;
+            gap: 20px;
+        }
+
+        /* 左侧文件列表 */
+        .file-list {
+            flex: 0 0 300px;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 24px;
+            padding: 15px;
+            overflow-y: auto;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .file-list h3 {
+            font-weight: 300;
+            letter-spacing: 1px;
+            margin-bottom: 15px;
+            padding-left: 8px;
+            color: #aaddff;
+            border-left: 3px solid #00ffff;
+        }
+
+        .file-list ul {
+            list-style: none;
+        }
+
+        .file-list li {
+            margin: 6px 0;
+            padding: 10px 15px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border-left: 3px solid transparent;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 1rem;
+            color: #eee;
+            word-break: break-word;
+        }
+
+        .file-list li:hover {
+            background: rgba(255, 255, 255, 0.15);
+            border-left-color: #00ffff;
+            transform: translateX(5px);
+        }
+
+        .file-list .folder-item::before {
+            content: "📁";
+            margin-right: 5px;
+            font-size: 1.2rem;
+        }
+
+        .file-list .file-item::before {
+            content: "📄";
+            margin-right: 5px;
+            font-size: 1.2rem;
+        }
+
+        /* 右侧预览区域 */
+        .preview-panel {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 24px;
+            padding: 20px;
+            overflow-y: auto;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.05);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .preview-panel h3 {
+            font-weight: 300;
+            letter-spacing: 1px;
+            margin-bottom: 15px;
+            padding-left: 8px;
+            color: #aaddff;
+            border-left: 3px solid #00ffff;
+        }
+
+        .preview-content {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 16px;
+            padding: 20px;
+            overflow: auto;
+            font-family: 'Fira Code', 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            color: #f0f0f0;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .preview-content img {
+            max-width: 100%;
+            max-height: 70vh;
+            object-fit: contain;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        .preview-content a {
+            color: #8cb4ff;
+            text-decoration: none;
+        }
+
+        .preview-content a:hover {
+            text-decoration: underline;
+        }
+
+        .placeholder {
+            color: #aaa;
+            font-style: italic;
+            text-align: center;
+            padding: 40px;
+        }
+
+        /* 加载状态 */
+        .loading, .error {
+            text-align: center;
+            padding: 20px;
+            color: #aaddff;
+        }
+        .error {
+            color: #ffaaaa;
+        }
+
+        /* 自定义滚动条 */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(255,255,255,0.05);
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(100,200,255,0.3);
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 动态粒子画布 -->
+    <canvas id="canvas-bg"></canvas>
+
+    <!-- 主应用界面 -->
+    <div class="app">
+        <div class="main-card">
+            <!-- 头部：标题 + 面包屑 -->
+            <div class="header">
+                <h1>
+                    <span>📂</span> 仓库浏览器
+                </h1>
+                <div class="breadcrumb" id="breadcrumb">
+                    <!-- 动态生成面包屑 -->
+                </div>
+            </div>
+
+            <!-- 左右内容区 -->
+            <div class="content-panel">
+                <!-- 左侧文件列表 -->
+                <div class="file-list">
+                    <h3>📋 文件列表</h3>
+                    <div id="directory-list">
+                        <div class="loading">加载中...</div>
+                    </div>
+                </div>
+
+                <!-- 右侧预览区 -->
+                <div class="preview-panel">
+                    <h3>🔍 文件预览</h3>
+                    <div class="preview-content" id="preview-content">
+                        <div class="placeholder">👈 点击左侧文件查看内容</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==================== 炫酷粒子背景特效（与之前相同，略作优化） ====================
+        (function() {
+            const canvas = document.getElementById('canvas-bg');
+            const ctx = canvas.getContext('2d');
+
+            let width, height;
+            let particles = [];
+            const PARTICLE_COUNT = 120;
+            const MAX_DISTANCE = 160;
+            const MOUSE_RADIUS = 130;
+            const REPEL_FORCE = 0.6;
+
+            let mouseX = null, mouseY = null;
+
+            function initParticles() {
+                particles = [];
+                for (let i = 0; i < PARTICLE_COUNT; i++) {
+                    particles.push({
+                        x: Math.random() * width,
+                        y: Math.random() * height,
+                        vx: (Math.random() - 0.5) * 1.5,
+                        vy: (Math.random() - 0.5) * 1.5,
+                        size: Math.random() * 2.5 + 1.5,
+                        color: `rgba(${100 + Math.random()*100}, ${150 + Math.random()*100}, 255, 0.8)`
+                    });
+                }
+            }
+
+            function resizeCanvas() {
+                width = window.innerWidth;
+                height = window.innerHeight;
+                canvas.width = width;
+                canvas.height = height;
+                initParticles();
+            }
+
+            function updateParticles() {
+                for (let i = 0; i < particles.length; i++) {
+                    let p = particles[i];
+                    p.x += p.vx;
+                    p.y += p.vy;
+
+                    if (p.x < 0) { p.x = 0; p.vx *= -0.9; }
+                    if (p.x > width) { p.x = width; p.vx *= -0.9; }
+                    if (p.y < 0) { p.y = 0; p.vy *= -0.9; }
+                    if (p.y > height) { p.y = height; p.vy *= -0.9; }
+
+                    if (mouseX !== null && mouseY !== null) {
+                        const dx = p.x - mouseX;
+                        const dy = p.y - mouseY;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        if (dist < MOUSE_RADIUS && dist > 0.1) {
+                            const force = (MOUSE_RADIUS - dist) / MOUSE_RADIUS * REPEL_FORCE;
+                            const angle = Math.atan2(dy, dx);
+                            p.vx += Math.cos(angle) * force;
+                            p.vy += Math.sin(angle) * force;
+                        }
+                    }
+
+                    const maxSpeed = 2.2;
+                    let sp = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+                    if (sp > maxSpeed) {
+                        p.vx = (p.vx / sp) * maxSpeed;
+                        p.vy = (p.vy / sp) * maxSpeed;
+                    }
+                }
+            }
+
+            function draw() {
+                ctx.clearRect(0, 0, width, height);
+
+                for (let p of particles) {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                    ctx.fillStyle = p.color;
+                    ctx.shadowColor = 'cyan';
+                    ctx.shadowBlur = 12;
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                }
+
+                for (let i = 0; i < particles.length; i++) {
+                    for (let j = i + 1; j < particles.length; j++) {
+                        const p1 = particles[i];
+                        const p2 = particles[j];
+                        const dx = p1.x - p2.x;
+                        const dy = p1.y - p2.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        if (dist < MAX_DISTANCE) {
+                            const opacity = (1 - dist / MAX_DISTANCE) * 0.35;
+                            ctx.strokeStyle = `rgba(150, 220, 255, ${opacity})`;
+                            ctx.lineWidth = 1.2;
+                            ctx.beginPath();
+                            ctx.moveTo(p1.x, p1.y);
+                            ctx.lineTo(p2.x, p2.y);
+                            ctx.stroke();
+                        }
+                    }
+                }
+            }
+
+            function animate() {
+                updateParticles();
+                draw();
+                requestAnimationFrame(animate);
+            }
+
+            function onMouseMove(e) {
+                const rect = canvas.getBoundingClientRect();
+                mouseX = e.clientX - rect.left;
+                mouseY = e.clientY - rect.top;
+            }
+
+            function onMouseLeave() {
+                mouseX = mouseY = null;
+            }
+
+            window.addEventListener('resize', resizeCanvas);
+            canvas.addEventListener('mousemove', onMouseMove);
+            canvas.addEventListener('mouseleave', onMouseLeave);
+
+            resizeCanvas();
+            animate();
+        })();
+
+        // ==================== 仓库浏览核心逻辑 ====================
+        (function() {
+            // ---------- 配置 ----------
+            const username = 'BeiTaaaaaaa';   // 请替换为你的 GitHub 用户名
+            const repo = 'probility-theory';       // 请替换为你的仓库名
+
+            // DOM 元素
+            const dirListEl = document.getElementById('directory-list');
+            const previewEl = document.getElementById('preview-content');
+            const breadcrumbEl = document.getElementById('breadcrumb');
+
+            // 状态
+            let currentPath = '';  // 当前目录路径，空字符串表示根目录
+            let currentFiles = []; // 当前目录下的文件列表
+
+            // ---------- 辅助函数 ----------
+            // 更新面包屑
+            function renderBreadcrumb() {
+                const parts = currentPath ? currentPath.split('/') : [];
+                let html = '<a data-path="">根目录</a>';
+                let accumulated = '';
+                for (let i = 0; i < parts.length; i++) {
+                    const part = parts[i];
+                    accumulated += (accumulated ? '/' : '') + part;
+                    html += `<span class="separator">/</span>`;
+                    if (i === parts.length - 1) {
+                        html += `<span class="current">${part}</span>`;
+                    } else {
+                        html += `<a data-path="${accumulated}">${part}</a>`;
+                    }
+                }
+                breadcrumbEl.innerHTML = html;
+
+                // 绑定点击事件
+                breadcrumbEl.querySelectorAll('a[data-path]').forEach(a => {
+                    a.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        const path = a.getAttribute('data-path');
+                        navigateTo(path);
+                    });
+                });
+            }
+
+            // 加载指定路径的目录内容
+            function loadDirectory(path) {
+                currentPath = path || '';
+                dirListEl.innerHTML = '<div class="loading">加载目录中...</div>';
+
+                // 调用 GitHub API
+                const apiUrl = `https://api.github.com/repos/${username}/${repo}/contents/${encodeURIComponent(path)}`;
+                fetch(apiUrl)
+                    .then(res => {
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                        return res.json();
+                    })
+                    .then(data => {
+                        if (!Array.isArray(data)) {
+                            // 如果不是数组（可能是文件或错误），回退显示空
+                            dirListEl.innerHTML = '<div class="error">目录不存在或不是文件夹</div>';
+                            currentFiles = [];
+                            return;
+                        }
+                        currentFiles = data;
+                        renderFileList(data);
+                        renderBreadcrumb();
+                        // 清空预览区（因为切换了目录）
+                        previewEl.innerHTML = '<div class="placeholder">👈 点击左侧文件查看内容</div>';
+                    })
+                    .catch(err => {
+                        dirListEl.innerHTML = `<div class="error">加载失败: ${err.message}</div>`;
+                    });
+            }
+
+            // 渲染文件列表
+            function renderFileList(files) {
+                if (!files || files.length === 0) {
+                    dirListEl.innerHTML = '<div class="placeholder">📭 空目录</div>';
+                    return;
+                }
+
+                // 按文件夹在前、文件在后排序
+                const sorted = [...files].sort((a, b) => {
+                    if (a.type === b.type) return a.name.localeCompare(b.name);
+                    return a.type === 'dir' ? -1 : 1;
+                });
+
+                let html = '<ul>';
+                sorted.forEach(item => {
+                    const isDir = item.type === 'dir';
+                    const liClass = isDir ? 'folder-item' : 'file-item';
+                    html += `<li class="${liClass}" data-path="${item.path}" data-type="${item.type}" data-url="${item.html_url}" data-download-url="${item.download_url || ''}">${item.name}</li>`;
+                });
+                html += '</ul>';
+                dirListEl.innerHTML = html;
+
+                // 为每一项绑定点击事件
+                dirListEl.querySelectorAll('li').forEach(li => {
+                    li.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const type = li.dataset.type;
+                        const path = li.dataset.path;
+                        if (type === 'dir') {
+                            // 文件夹：进入目录
+                            navigateTo(path);
+                        } else {
+                            // 文件：预览
+                            previewFile(li);
+                        }
+                    });
+                });
+            }
+
+            // 预览文件
+            function previewFile(li) {
+                const path = li.dataset.path;
+                const name = li.textContent;
+                const downloadUrl = li.dataset.downloadUrl; // raw 文件地址
+
+                if (!downloadUrl) {
+                    previewEl.innerHTML = '<div class="error">该文件无法预览（无下载链接）</div>';
+                    return;
+                }
+
+                // 根据扩展名决定预览方式
+                const ext = name.split('.').pop().toLowerCase();
+                const textExts = ['txt', 'md', 'html', 'htm', 'js', 'css', 'json', 'xml', 'yaml', 'yml', 'sh', 'py', 'java', 'c', 'cpp', 'h', 'php', 'rb', 'go', 'rs', 'swift', 'kt', 'ts', 'jsx', 'tsx', 'vue', 'sql', 'log', 'ini', 'cfg', 'conf', 'properties'];
+                const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'svg', 'webp', 'ico'];
+                const isText = textExts.includes(ext);
+                const isImage = imageExts.includes(ext);
+
+                previewEl.innerHTML = '<div class="loading">加载预览中...</div>';
+
+                if (isImage) {
+                    // 图片直接显示
+                    previewEl.innerHTML = `<img src="${downloadUrl}" alt="${name}" style="max-width:100%;" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\'error\'>图片加载失败</div>';">`;
+                } else if (isText) {
+                    // 文本文件获取内容并显示
+                    fetch(downloadUrl)
+                        .then(res => {
+                            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                            return res.text();
+                        })
+                        .then(text => {
+                            // 简单转义，防止XSS（以文本形式展示）
+                            const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                            previewEl.innerHTML = `<pre style="margin:0; white-space: pre-wrap; word-wrap: break-word;">${escaped}</pre>`;
+                        })
+                        .catch(err => {
+                            previewEl.innerHTML = `<div class="error">加载失败: ${err.message}</div>`;
+                        });
+                } else {
+                    // 其他文件提供下载链接
+                    previewEl.innerHTML = `
+                        <div class="placeholder">
+                            无法预览此文件类型。<br>
+                            <a href="${downloadUrl}" target="_blank" rel="noopener noreferrer">📥 点击下载文件</a>
+                        </div>
+                    `;
+                }
+            }
+
+            // 导航到指定路径（可以是相对路径或绝对路径）
+            function navigateTo(path) {
+                loadDirectory(path);
+            }
+
+            // 初始化：加载根目录
+            loadDirectory('');
+
+            // 导出以便调试（可选）
+            window.__app = { navigateTo };
+        })();
+    </script>
+</body>
+</html>
